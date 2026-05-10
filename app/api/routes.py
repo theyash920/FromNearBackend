@@ -6,7 +6,8 @@ from app.schemas import AnalysisOutput, LeadScoreCard, RunRecord, VendorInput, W
 from app.schemas.response_schemas import ChatRequest, ChatResponse
 from app.services.analysis_service import AnalysisService
 from app.services.controller import AgentController
-from app.services.events import WorkflowEventBus
+from app.services.events import WorkflowEventBus 
+from app.repositories.vendor_repository import VendorRepository
 
 router = APIRouter(prefix="/api/v1", tags=["growth-employee"])
 
@@ -58,6 +59,18 @@ async def chat(request: ChatRequest, session: AsyncSession = Depends(get_db)) ->
         vendor_context=request.vendor_context,
         session_id=request.session_id,
     )
+
+
+@router.get("/stats")
+async def get_dashboard_stats(session: AsyncSession = Depends(get_db)):
+    repo = VendorRepository(session)
+    return await repo.get_dashboard_stats()
+
+
+@router.get("/memory")
+async def get_memory_timeline(vendor_id: str | None = None, session: AsyncSession = Depends(get_db)):
+    repo = VendorRepository(session)
+    return await repo.get_memory_timeline(vendor_id=vendor_id)
 
 
 @router.websocket("/ws/workflows/{run_id}")

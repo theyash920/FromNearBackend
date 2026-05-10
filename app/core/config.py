@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     database_url: str
     sync_database_url: str
-    redis_url: str
+    redis_url: str = Field(default="")
 
     chroma_host: str = Field(default="localhost")
     chroma_port: int = Field(default=8000)

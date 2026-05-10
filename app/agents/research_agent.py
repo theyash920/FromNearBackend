@@ -34,10 +34,10 @@ class ResearchAgent(AgentBase):
             "instagram_handle": instagram.get("handle", ""),
             "instagram_signals": instagram.get("signals", []),
             "maps_available": maps.get("available", False),
-            "business_name": vendor.get("business_name", ""),
-            "category": vendor.get("category", ""),
-            "location": vendor.get("location", ""),
-            "description": vendor.get("business_description", "")[:300],
+            "business_name": vendor.get("business_name") or "",
+            "category": vendor.get("category") or "",
+            "location": vendor.get("location") or "",
+            "description": (vendor.get("business_description") or "")[:300],
         }
 
         prompt = self.build_compact_prompt(

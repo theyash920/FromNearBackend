@@ -1,8 +1,8 @@
 """Memory extraction, injection, and persistence for token-efficient agents.
 
 Implements the hybrid memory architecture:
-- Redis: ephemeral short-term session state (active agent, recent context, temp cache)
 - MySQL: long-term persistent storage (conversations, memory snapshots, audit)
+- In-memory dict: ephemeral short-term session state for the current process
 
 The memory pipeline:
 1. Scan backward through message history
@@ -17,9 +17,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import redis.asyncio as aioredis
-
-from app.core.config import get_settings
 from app.schemas.response_schemas import AgentMemory
 
 
@@ -111,48 +108,61 @@ def merge_memory(old: AgentMemory | None, new_data: dict[str, Any]) -> AgentMemo
 
 
 # ---------------------------------------------------------------------------
-# Redis: ephemeral short-term session memory
+# MySQL-backed session memory (replaces Redis)
 # ---------------------------------------------------------------------------
 
 class SessionMemoryStore:
-    """Redis-backed ephemeral session state for active workflows.
+    """MySQL-backed session state for active workflows via the conversations table.
 
-    FALLBACK: If Redis is unavailable, uses a local in-memory dictionary.
-    This is ideal for local-only testing without Docker dependencies.
+    Uses a local in-memory dictionary as a fast cache that is also persisted
+    to the MySQL `conversations` table for durability across restarts.
 
-    TTL: 1 hour (sessions expire after inactivity).
+    TTL is not enforced at this layer; the conversations table keeps history.
     """
 
-    TTL_SECONDS = 3600  # 1 hour
-    _LOCAL_STORE: dict[str, str] = {}  # In-memory fallback
+    _LOCAL_CACHE: dict[str, str] = {}  # Fast in-process cache
 
     def __init__(self) -> None:
-        self.settings = get_settings()
+        pass
 
     def _key(self, session_id: str) -> str:
         return f"session:{session_id}"
 
     async def save_session(self, session_id: str, data: dict[str, Any]) -> None:
-        """Save ephemeral session state to Redis with TTL, or fallback to memory."""
-        try:
-            client = aioredis.from_url(self.settings.redis_url, decode_responses=True)
-            async with client:
-                await client.setex(self._key(session_id), self.TTL_SECONDS, json.dumps(data))
-        except (ConnectionError, Exception):
-            # Fallback to local memory for testing without Redis
-            self._LOCAL_STORE[self._key(session_id)] = json.dumps(data)
+        """Save session state to in-memory cache (persisted to MySQL by controller)."""
+        self._LOCAL_CACHE[self._key(session_id)] = json.dumps(data)
 
     async def load_session(self, session_id: str) -> dict[str, Any] | None:
-        """Load ephemeral session state from Redis or local memory fallback."""
+        """Load session state from in-memory cache, or from MySQL conversations table."""
+        raw = self._LOCAL_CACHE.get(self._key(session_id))
+        if raw:
+            return json.loads(raw)
+
+        # Try to recover from MySQL conversations table
         try:
-            client = aioredis.from_url(self.settings.redis_url, decode_responses=True)
-            async with client:
-                raw = await client.get(self._key(session_id))
-                return json.loads(raw) if raw else None
-        except (ConnectionError, Exception):
-            # Fallback to local memory
-            raw = self._LOCAL_STORE.get(self._key(session_id))
-            return json.loads(raw) if raw else None
+            from app.db.session import AsyncSessionLocal
+            from app.models import Conversation
+            from sqlalchemy import select
+
+            async with AsyncSessionLocal() as db_session:
+                result = await db_session.execute(
+                    select(Conversation)
+                    .where(Conversation.session_id == session_id)
+                    .order_by(Conversation.updated_at.desc())
+                    .limit(1)
+                )
+                conversation = result.scalar_one_or_none()
+                if conversation and conversation.memory_snapshot:
+                    session_data = {
+                        "memory_snapshot": conversation.memory_snapshot,
+                        "active_agent": conversation.memory_snapshot.get("active_agent", "router"),
+                    }
+                    self._LOCAL_CACHE[self._key(session_id)] = json.dumps(session_data)
+                    return session_data
+        except Exception:
+            pass
+
+        return None
 
     async def update_active_agent(self, session_id: str, agent_name: str) -> None:
         """Update the currently active agent for a session."""
@@ -163,17 +173,12 @@ class SessionMemoryStore:
     async def cache_recent_context(
         self, session_id: str, messages: list[dict[str, Any]], memory: dict[str, Any]
     ) -> None:
-        """Cache the recent context window and memory snapshot in Redis."""
+        """Cache the recent context window and memory snapshot."""
         session = await self.load_session(session_id) or {}
         session["recent_messages"] = messages[-4:]  # Keep last 4 messages
         session["memory_snapshot"] = memory
         await self.save_session(session_id, session)
 
     async def delete_session(self, session_id: str) -> None:
-        """Remove session state from Redis or local memory."""
-        try:
-            client = aioredis.from_url(self.settings.redis_url, decode_responses=True)
-            async with client:
-                await client.delete(self._key(session_id))
-        except (ConnectionError, Exception):
-            self._LOCAL_STORE.pop(self._key(session_id), None)
+        """Remove session state from cache."""
+        self._LOCAL_CACHE.pop(self._key(session_id), None)

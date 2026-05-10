@@ -155,3 +155,56 @@ class VendorRepository:
                 for v in priority_queue
             ],
         }
+
+    async def get_memory_timeline(self, vendor_id: str | None = None) -> list[dict]:
+        """Fetch a unified timeline of memory items, campaigns, and outreach attempts."""
+        timeline: list[dict] = []
+
+        # Memory items
+        query = select(MemoryItem).order_by(desc(MemoryItem.created_at)).limit(50)
+        if vendor_id:
+            query = query.where(MemoryItem.vendor_id == vendor_id)
+        result = await self.session.execute(query)
+        for item in result.scalars().all():
+            timeline.append({
+                "type": "memory",
+                "kind": item.kind,
+                "content": item.content,
+                "vendor_id": item.vendor_id,
+                "created_at": item.created_at.isoformat() if item.created_at else None,
+                "data": item.memory_json or {},
+            })
+
+        # Campaigns
+        query = select(Campaign).order_by(desc(Campaign.created_at)).limit(50)
+        if vendor_id:
+            query = query.where(Campaign.vendor_id == vendor_id)
+        result = await self.session.execute(query)
+        for c in result.scalars().all():
+            timeline.append({
+                "type": "campaign",
+                "kind": "campaign",
+                "content": c.name,
+                "vendor_id": c.vendor_id,
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+                "data": c.campaign_json or {},
+            })
+
+        # Outreach attempts
+        query = select(OutreachAttempt).order_by(desc(OutreachAttempt.created_at)).limit(50)
+        if vendor_id:
+            query = query.where(OutreachAttempt.vendor_id == vendor_id)
+        result = await self.session.execute(query)
+        for o in result.scalars().all():
+            timeline.append({
+                "type": "outreach",
+                "kind": o.channel,
+                "content": o.message[:200] if o.message else "",
+                "vendor_id": o.vendor_id,
+                "created_at": o.created_at.isoformat() if o.created_at else None,
+                "data": o.metadata_json or {},
+            })
+
+        # Sort by created_at descending
+        timeline.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+        return timeline

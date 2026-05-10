@@ -1,8 +1,9 @@
+import asyncio
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.vendor_repository import VendorRepository
 from app.schemas import LeadScoreCard, RunRecord, VendorInput, WorkflowStartResponse
-from app.workers.tasks import run_growth_workflow
 
 
 class AnalysisService:
@@ -14,10 +15,25 @@ class AnalysisService:
         vendor = await self.repo.upsert_vendor_from_input(payload)
         run = await self.repo.create_run(vendor.id, payload.model_dump(mode="json"))
         await self.session.commit()
-        run_growth_workflow.delay(run.id, payload.model_dump(mode="json"))
+
+        # Run the workflow in the background (no Celery/Redis needed)
+        asyncio.create_task(self._run_workflow_background(run.id, payload))
+
         return WorkflowStartResponse(
             run_id=run.id, status="queued", monitor_url=f"/api/v1/runs/{run.id}"
         )
+
+    async def _run_workflow_background(self, run_id: str, payload: VendorInput) -> None:
+        """Execute the growth workflow in a background task."""
+        from app.db.session import AsyncSessionLocal
+        from app.workflows.growth_workflow import GrowthWorkflow
+
+        async with AsyncSessionLocal() as session:
+            try:
+                await GrowthWorkflow().run(session, run_id, payload)
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
 
     async def run_inline(self, payload: VendorInput) -> dict:
         vendor = await self.repo.upsert_vendor_from_input(payload)

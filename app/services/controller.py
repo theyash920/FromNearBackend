@@ -13,7 +13,7 @@ Pipeline flow:
         ↓
     Structured JSON Response { "response": ..., "memory": ... }
         ↓
-    Persist Updated Memory (Redis ephemeral + MySQL persistent)
+    Persist Updated Memory (MySQL persistent)
         ↓
     Return Response
 """
@@ -69,7 +69,7 @@ class AgentController:
         # Step 1: Extract memory from message history
         recovered_memory = extract_memory(messages)
 
-        # Step 2: Try to recover from Redis session if no memory in messages
+        # Step 2: Try to recover from session store if no memory in messages
         if recovered_memory is None:
             redis_session = await self.session_store.load_session(session_id)
             if redis_session and "memory_snapshot" in redis_session:
@@ -85,7 +85,7 @@ class AgentController:
         route_decision = await self.router.classify(truncated, recovered_memory)
         logger.info("agent_routed", route=route_decision.route, reasoning=route_decision.reasoning)
 
-        # Step 5: Update Redis with active agent
+        # Step 5: Update session store with active agent
         await self.session_store.update_active_agent(session_id, route_decision.route)
 
         # Step 6: Execute the selected agent(s)
@@ -103,7 +103,7 @@ class AgentController:
             "accumulated_data": agent_output.response,
         })
 
-        # Step 8: Cache in Redis (ephemeral)
+        # Step 8: Cache in session store
         await self.session_store.cache_recent_context(
             session_id,
             messages,
