@@ -16,18 +16,18 @@ class GrowthWorkflow:
 
     def _build_graph(self):
         builder = StateGraph(GrowthState)
-        builder.add_node("research", ResearchAgent())
-        builder.add_node("qualification", QualificationAgent())
-        builder.add_node("sales", SalesAgent())
-        builder.add_node("marketing", MarketingAgent())
-        builder.add_node("validator", ValidatorAgent())
+        builder.add_node("agent_research", ResearchAgent())
+        builder.add_node("agent_qualification", QualificationAgent())
+        builder.add_node("agent_sales", SalesAgent())
+        builder.add_node("agent_marketing", MarketingAgent())
+        builder.add_node("agent_validator", ValidatorAgent())
 
-        builder.add_edge(START, "research")
-        builder.add_edge("research", "qualification")
-        builder.add_edge("qualification", "sales")
-        builder.add_edge("sales", "marketing")
-        builder.add_edge("marketing", "validator")
-        builder.add_edge("validator", END)
+        builder.add_edge(START, "agent_research")
+        builder.add_edge("agent_research", "agent_qualification")
+        builder.add_edge("agent_qualification", "agent_sales")
+        builder.add_edge("agent_sales", "agent_marketing")
+        builder.add_edge("agent_marketing", "agent_validator")
+        builder.add_edge("agent_validator", END)
         return builder.compile()
 
     async def run(self, session: AsyncSession, run_id: str, payload: VendorInput) -> dict:

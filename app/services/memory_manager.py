@@ -117,16 +117,14 @@ def merge_memory(old: AgentMemory | None, new_data: dict[str, Any]) -> AgentMemo
 class SessionMemoryStore:
     """Redis-backed ephemeral session state for active workflows.
 
-    Stores:
-    - Current active agent for the session
-    - Recent context window (last 3-4 messages)
-    - Temporary workflow cache
-    - Realtime session handling state
+    FALLBACK: If Redis is unavailable, uses a local in-memory dictionary.
+    This is ideal for local-only testing without Docker dependencies.
 
     TTL: 1 hour (sessions expire after inactivity).
     """
 
     TTL_SECONDS = 3600  # 1 hour
+    _LOCAL_STORE: dict[str, str] = {}  # In-memory fallback
 
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -135,21 +133,26 @@ class SessionMemoryStore:
         return f"session:{session_id}"
 
     async def save_session(self, session_id: str, data: dict[str, Any]) -> None:
-        """Save ephemeral session state to Redis with TTL."""
-        client = aioredis.from_url(self.settings.redis_url, decode_responses=True)
+        """Save ephemeral session state to Redis with TTL, or fallback to memory."""
         try:
-            await client.setex(self._key(session_id), self.TTL_SECONDS, json.dumps(data))
-        finally:
-            await client.aclose()
+            client = aioredis.from_url(self.settings.redis_url, decode_responses=True)
+            async with client:
+                await client.setex(self._key(session_id), self.TTL_SECONDS, json.dumps(data))
+        except (ConnectionError, Exception):
+            # Fallback to local memory for testing without Redis
+            self._LOCAL_STORE[self._key(session_id)] = json.dumps(data)
 
     async def load_session(self, session_id: str) -> dict[str, Any] | None:
-        """Load ephemeral session state from Redis."""
-        client = aioredis.from_url(self.settings.redis_url, decode_responses=True)
+        """Load ephemeral session state from Redis or local memory fallback."""
         try:
-            raw = await client.get(self._key(session_id))
+            client = aioredis.from_url(self.settings.redis_url, decode_responses=True)
+            async with client:
+                raw = await client.get(self._key(session_id))
+                return json.loads(raw) if raw else None
+        except (ConnectionError, Exception):
+            # Fallback to local memory
+            raw = self._LOCAL_STORE.get(self._key(session_id))
             return json.loads(raw) if raw else None
-        finally:
-            await client.aclose()
 
     async def update_active_agent(self, session_id: str, agent_name: str) -> None:
         """Update the currently active agent for a session."""
@@ -167,9 +170,10 @@ class SessionMemoryStore:
         await self.save_session(session_id, session)
 
     async def delete_session(self, session_id: str) -> None:
-        """Remove session state from Redis."""
-        client = aioredis.from_url(self.settings.redis_url, decode_responses=True)
+        """Remove session state from Redis or local memory."""
         try:
-            await client.delete(self._key(session_id))
-        finally:
-            await client.aclose()
+            client = aioredis.from_url(self.settings.redis_url, decode_responses=True)
+            async with client:
+                await client.delete(self._key(session_id))
+        except (ConnectionError, Exception):
+            self._LOCAL_STORE.pop(self._key(session_id), None)

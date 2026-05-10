@@ -1,4 +1,4 @@
-from sqlalchemy import desc, or_, select
+from sqlalchemy import desc, or_, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AgentRun, Campaign, MemoryItem, OutreachAttempt, Vendor
@@ -123,3 +123,35 @@ class VendorRepository:
         self.session.add(item)
         await self.session.flush()
         return item
+
+    async def get_dashboard_stats(self) -> dict:
+        leads_count = (await self.session.execute(select(func.count(Vendor.id)))).scalar() or 0
+        campaigns_count = (await self.session.execute(select(func.count(Campaign.id)))).scalar() or 0
+        active_runs_count = (
+            await self.session.execute(select(func.count(AgentRun.id)).where(AgentRun.status == "running"))
+        ).scalar() or 0
+        memory_count = (await self.session.execute(select(func.count(MemoryItem.id)))).scalar() or 0
+
+        priority_result = await self.session.execute(
+            select(Vendor)
+            .where(Vendor.lead_score.isnot(None))
+            .order_by(desc(Vendor.lead_score))
+            .limit(5)
+        )
+        priority_queue = priority_result.scalars().all()
+
+        return {
+            "leads_count": leads_count,
+            "campaigns_count": campaigns_count,
+            "active_runs_count": active_runs_count,
+            "memory_count": memory_count,
+            "priority_queue": [
+                {
+                    "name": v.business_name or "Unknown",
+                    "category": v.category or "Unknown",
+                    "score": v.lead_score,
+                    "status": "Lead processed",
+                }
+                for v in priority_queue
+            ],
+        }

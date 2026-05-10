@@ -21,20 +21,45 @@ class LocalLLMClient:
         schema_hint: dict[str, Any],
         model: str | None = None,
     ) -> dict[str, Any]:
-        selected_model = model or self.settings.ollama_chat_model
         prompt = (
             f"{system}\n\n"
             "Return ONLY valid JSON. Do not wrap the JSON in markdown.\n"
             f"Expected schema keys: {json.dumps(schema_hint)}\n\n"
-            f"Task:\n{user}"
         )
+        
+        if self.settings.groq_api_key:
+            selected_model = model or "llama3-8b-8192"
+            try:
+                async with httpx.AsyncClient(timeout=90) as client:
+                    response = await client.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {self.settings.groq_api_key}"},
+                        json={
+                            "model": selected_model,
+                            "messages": [
+                                {"role": "system", "content": prompt},
+                                {"role": "user", "content": user}
+                            ],
+                            "response_format": {"type": "json_object"},
+                            "temperature": 0.25,
+                        },
+                    )
+                    response.raise_for_status()
+                raw = response.json()["choices"][0]["message"].get("content", "{}")
+                return json.loads(raw)
+            except Exception:
+                return self._deterministic_fallback(user)
+
+        # Fallback to Ollama
+        selected_model = model or self.settings.ollama_chat_model
+        prompt_with_user = f"{prompt}Task:\n{user}"
         try:
             async with httpx.AsyncClient(timeout=90) as client:
                 response = await client.post(
                     f"{self.settings.ollama_base_url}/api/generate",
                     json={
                         "model": selected_model,
-                        "prompt": prompt,
+                        "prompt": prompt_with_user,
                         "stream": False,
                         "format": "json",
                         "options": {"temperature": 0.25},
